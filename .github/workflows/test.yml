@@ -1,0 +1,34 @@
+name: Test — Traffic Monitor
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test-downloads:
+    name: Download known-size files (OVH)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: ./   # uses the action from this repo
+        # equivalent to: uses: muldos/ci-traffic-monitor@v1
+
+      - name: Download 10 MB
+        run: curl -fsSL -o /dev/null https://proof.ovh.net/files/10Mb.dat
+
+      - name: Download 100 MB
+        run: curl -fsSL -o /dev/null https://proof.ovh.net/files/100Mb.dat
+
+  test-docker-pull:
+    name: Docker pull (image traffic)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: ./
+
+      - name: Pull a known Docker image
+        run: docker pull alpine:latest

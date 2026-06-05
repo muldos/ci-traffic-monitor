@@ -1,0 +1,14 @@
+node_modules/
+
+# build artifacts (keep dist/ committed for GitHub Actions)
+*.log
+npm-debug.log*
+
+# OS
+.DS_Store
+Thumbs.db
+
+# editor
+.vscode/
+.idea/
+*.swp

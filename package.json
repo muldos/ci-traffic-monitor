@@ -1,0 +1,29 @@
+{
+  "name": "ci-traffic-monitor",
+  "version": "1.0.0",
+  "description": "GitHub Action that measures inbound and outbound network traffic during a workflow run.",
+  "scripts": {
+    "build": "ncc build src/pre.js -o dist/pre --license licenses.txt && ncc build src/main.js -o dist/main --license licenses.txt && ncc build src/post.js -o dist/post --license licenses.txt",
+    "build:pre": "ncc build src/pre.js -o dist/pre --license licenses.txt",
+    "build:main": "ncc build src/main.js -o dist/main --license licenses.txt",
+    "build:post": "ncc build src/post.js -o dist/post --license licenses.txt"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/muldos/ci-traffic-monitor.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "bugs": {
+    "url": "https://github.com/muldos/ci-traffic-monitor/issues"
+  },
+  "homepage": "https://github.com/muldos/ci-traffic-monitor#readme",
+  "dependencies": {
+    "@actions/core": "^1.11.1"
+  },
+  "devDependencies": {
+    "@vercel/ncc": "^0.38.4"
+  }
+}

@@ -1,0 +1,13 @@
+name: CI Traffic Monitor
+description: Measures inbound and outbound network traffic during a GitHub Actions workflow run.
+author: muldos
+
+branding:
+  icon: activity
+  color: blue
+
+runs:
+  using: node20
+  pre: dist/pre/index.js
+  main: dist/post/index.js
+  post: dist/post/index.js
