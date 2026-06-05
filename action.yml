@@ -7,7 +7,7 @@ branding:
   color: blue
 
 runs:
-  using: node20
+  using: node24
   pre: dist/pre/index.js
   main: dist/post/index.js
   post: dist/post/index.js

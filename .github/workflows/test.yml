@@ -11,10 +11,7 @@ jobs:
     name: Download known-size files (OVH)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-
-      - uses: ./   # uses the action from this repo
-        # equivalent to: uses: muldos/ci-traffic-monitor@v1
+      - uses: muldos/ci-traffic-monitor@main
 
       - name: Download 10 MB
         run: curl -fsSL -o /dev/null https://proof.ovh.net/files/10Mb.dat
@@ -26,9 +23,7 @@ jobs:
     name: Docker pull (image traffic)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-
-      - uses: ./
+      - uses: muldos/ci-traffic-monitor@main
 
       - name: Pull a known Docker image
         run: docker pull alpine:latest
