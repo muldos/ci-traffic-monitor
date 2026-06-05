@@ -7,23 +7,32 @@ on:
   workflow_dispatch:
 
 jobs:
-  test-downloads:
-    name: Download known-size files (OVH)
+  test-totals-only:
+    name: Totals only (default, no sudo needed)
     runs-on: ubuntu-latest
     steps:
       - uses: muldos/ci-traffic-monitor@main
+        # detailed not set → defaults to false
 
-      - name: Download 10 MB
+      - name: Download 10 MB (OVH)
         run: curl -fsSL -o /dev/null https://proof.ovh.net/files/10Mb.dat
 
-      - name: Download 100 MB
+      - name: Download 100 MB (OVH)
         run: curl -fsSL -o /dev/null https://proof.ovh.net/files/100Mb.dat
 
-  test-docker-pull:
-    name: Docker pull (image traffic)
+  test-detailed:
+    name: Detailed breakdown (iptables, sudo required)
     runs-on: ubuntu-latest
     steps:
       - uses: muldos/ci-traffic-monitor@main
+        with:
+          detailed: 'true'
 
-      - name: Pull a known Docker image
+      - name: Download 10 MB (OVH)
+        run: curl -fsSL -o /dev/null https://proof.ovh.net/files/10Mb.dat
+
+      - name: npm install (small)
+        run: npm install --prefix /tmp/test-pkg cowsay
+
+      - name: Pull Docker image
         run: docker pull alpine:latest

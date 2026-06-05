@@ -27529,21 +27529,12 @@ module.exports = parseParams
 
 const { execSync } = __nccwpck_require__(5317);
 const dns = (__nccwpck_require__(2250).promises);
+const SERVICES = __nccwpck_require__(8410);
 
-// Known services to classify by resolving their hostnames to IPs.
-// Classification is best-effort: CDN-backed services rotate IPs.
-const SERVICES = {
-  npm:    { label: 'npm',        hosts: ['registry.npmjs.org', 'registry.yarnpkg.com'] },
-  docker: { label: 'Docker Hub', hosts: ['registry-1.docker.io', 'auth.docker.io', 'index.docker.io'] },
-  ghcr:   { label: 'GHCR',       hosts: ['ghcr.io'] },
-  github: { label: 'GitHub',     hosts: ['github.com', 'api.github.com', 'objects.githubusercontent.com', 'uploads.github.com'] },
-  apt:    { label: 'apt/Ubuntu', hosts: ['archive.ubuntu.com', 'security.ubuntu.com', 'packages.microsoft.com'] },
-};
-
-const PREFIX = 'CTM'; // CI Traffic Monitor — iptables chain prefix
-
-const chainOut = (key) => `${PREFIX}_${key.toUpperCase()}_O`;
-const chainIn  = (key) => `${PREFIX}_${key.toUpperCase()}_I`;
+// iptables chain names: CTM_<KEY>_O (OUTPUT) and CTM_<KEY>_I (INPUT)
+// Max iptables chain name length: 28 chars. Keys must be ≤ 10 chars.
+const chainOut = (key) => `CTM_${key.toUpperCase()}_O`;
+const chainIn  = (key) => `CTM_${key.toUpperCase()}_I`;
 
 function run(cmd) {
   try { execSync(cmd, { stdio: 'pipe' }); return true; }
@@ -27560,15 +27551,18 @@ function iptablesAvailable() {
 }
 
 /**
- * Resolves service IPs via DNS and creates iptables counting chains.
- * Returns the list of successfully set-up service keys, or null if iptables unavailable.
+ * Resolves service hostnames to IPs and sets up iptables counting chains.
+ * Returns the list of service keys that were successfully set up, or null
+ * if iptables is unavailable.
  */
 async function setup() {
   if (!iptablesAvailable()) return null;
 
   const activeKeys = [];
 
-  for (const [key, { hosts }] of Object.entries(SERVICES)) {
+  for (const svc of SERVICES) {
+    const { key, hosts } = svc;
+
     const ips = new Set();
     for (const host of hosts) {
       try {
@@ -27581,6 +27575,7 @@ async function setup() {
     const co = chainOut(key);
     const ci = chainIn(key);
 
+    // Create chains (silently ignore if they already exist)
     run(`sudo iptables -N ${co}`);
     run(`sudo iptables -N ${ci}`);
 
@@ -27589,7 +27584,7 @@ async function setup() {
       run(`sudo iptables -A ${ci} -s ${ip} -j RETURN`);
     }
 
-    // Insert jump at the top of OUTPUT / INPUT so our chains see all packets
+    // Insert jump rules at the top of OUTPUT / INPUT
     run(`sudo iptables -I OUTPUT 1 -j ${co}`);
     run(`sudo iptables -I INPUT  1 -j ${ci}`);
 
@@ -27600,7 +27595,8 @@ async function setup() {
 }
 
 /**
- * Sums the bytes column from `iptables -L <chain> -v -x -n` output.
+ * Sums bytes from all rules in an iptables chain.
+ * `iptables -L <chain> -v -x -n` columns: pkts bytes target prot ...
  */
 function chainBytes(chain) {
   const output = runOut(`sudo iptables -L ${chain} -v -x -n`);
@@ -27617,13 +27613,16 @@ function chainBytes(chain) {
 
 /**
  * Reads classified byte counts for each active service key.
- * Returns { <key>: { label, rx, tx } }
+ * Returns { <key>: { label, group, rx, tx } }
  */
 function read(activeKeys) {
+  const serviceMap = Object.fromEntries(SERVICES.map(s => [s.key, s]));
   const result = {};
   for (const key of activeKeys) {
+    const svc = serviceMap[key];
     result[key] = {
-      label: SERVICES[key].label,
+      label: svc.label,
+      group: svc.group,
       rx: chainBytes(chainIn(key)),
       tx: chainBytes(chainOut(key)),
     };
@@ -27632,7 +27631,7 @@ function read(activeKeys) {
 }
 
 /**
- * Removes all CTM_* chains and their jump rules from OUTPUT/INPUT.
+ * Removes all CTM_* chains and their jump rules from OUTPUT / INPUT.
  */
 function cleanup(activeKeys) {
   for (const key of activeKeys) {
@@ -27647,7 +27646,7 @@ function cleanup(activeKeys) {
   }
 }
 
-module.exports = { setup, read, cleanup, SERVICES };
+module.exports = { setup, read, cleanup };
 
 
 /***/ }),
@@ -27689,6 +27688,275 @@ function readNetCounters() {
 }
 
 module.exports = { readNetCounters };
+
+
+/***/ }),
+
+/***/ 8410:
+/***/ ((module) => {
+
+/**
+ * Service registry for traffic classification.
+ *
+ * Classification works by resolving each hostname to IPs at job start,
+ * then counting bytes in iptables chains. This means:
+ *
+ *   - Public services with stable or CDN FQDNs: well supported
+ *   - Self-hosted Artifactory / Nexus on custom domains: NOT classifiable
+ *     (HTTPS encrypts URLs, SNI matching is possible but not implemented)
+ *   - JFrog Cloud (*.jfrog.io): classifiable only if the specific subdomain
+ *     is listed in `hosts` below — add your org's hostname there
+ *
+ * To add a custom service, append an entry following the same schema.
+ *
+ * Fields:
+ *   key    - unique identifier, max 10 chars (used as iptables chain suffix)
+ *   label  - display name in the job summary report
+ *   group  - section header in the report
+ *   hosts  - FQDNs resolved to IPs for iptables accounting
+ */
+
+module.exports = [
+
+  // ── Package managers ──────────────────────────────────────────────────────
+
+  {
+    key: 'npm',
+    label: 'npm / Yarn',
+    group: 'Package managers',
+    hosts: [
+      'registry.npmjs.org',
+      'registry.yarnpkg.com',
+      'registry.npmjs.com',
+    ],
+  },
+  {
+    key: 'maven',
+    label: 'Maven / Gradle',
+    group: 'Package managers',
+    hosts: [
+      // Maven Central
+      'repo1.maven.org',
+      'repo.maven.apache.org',
+      // Sonatype OSSRH (legacy + new portal)
+      'oss.sonatype.org',
+      's01.oss.sonatype.org',
+      'central.sonatype.com',
+      'repo.sonatype.org',
+      // Google Maven
+      'maven.google.com',
+      // Gradle
+      'plugins.gradle.org',
+      'services.gradle.org',
+      'downloads.gradle.org',
+      'downloads.gradle-dn.com',
+      // Spring
+      'repo.spring.io',
+      // JCenter (deprecated 2021, still widely referenced)
+      'jcenter.bintray.com',
+      'dl.bintray.com',
+    ],
+  },
+  {
+    key: 'pypi',
+    label: 'PyPI',
+    group: 'Package managers',
+    hosts: [
+      'pypi.org',
+      'files.pythonhosted.org',
+      'pypi.python.org',          // legacy alias
+    ],
+  },
+  {
+    key: 'rubygems',
+    label: 'RubyGems',
+    group: 'Package managers',
+    hosts: [
+      'rubygems.org',
+      'api.rubygems.org',
+      'index.rubygems.org',
+      'bundler.rubygems.org',
+    ],
+  },
+  {
+    key: 'cargo',
+    label: 'Cargo (crates.io)',
+    group: 'Package managers',
+    hosts: [
+      'crates.io',
+      'static.crates.io',
+    ],
+  },
+  {
+    key: 'gomod',
+    label: 'Go modules',
+    group: 'Package managers',
+    hosts: [
+      'proxy.golang.org',
+      'sum.golang.org',
+      'goproxy.io',
+    ],
+  },
+  {
+    key: 'nuget',
+    label: 'NuGet',
+    group: 'Package managers',
+    hosts: [
+      'api.nuget.org',
+      'www.nuget.org',
+      'globalcdn.nuget.org',
+      'nuget.org',
+    ],
+  },
+  {
+    key: 'packagist',
+    label: 'Composer / Packagist',
+    group: 'Package managers',
+    hosts: [
+      'packagist.org',
+      'repo.packagist.org',
+    ],
+  },
+  {
+    key: 'hex',
+    label: 'Hex (Elixir/Erlang)',
+    group: 'Package managers',
+    hosts: [
+      'repo.hex.pm',
+      'hexdocs.pm',
+    ],
+  },
+
+  // ── Artifact repositories ─────────────────────────────────────────────────
+  //
+  // Self-hosted Artifactory/Nexus: traffic appears under "Unknown" unless you
+  // add the FQDN of your instance to the hosts list of a custom entry here.
+  // JFrog Cloud: replace <your-org> with your actual subdomain.
+
+  {
+    key: 'cloudsmith',
+    label: 'Cloudsmith',
+    group: 'Artifact repos',
+    hosts: [
+      'dl.cloudsmith.io',
+      'api.cloudsmith.io',
+      'docker.cloudsmith.io',
+    ],
+  },
+  {
+    key: 'jfrog',
+    label: 'JFrog Cloud (*.jfrog.io)',
+    group: 'Artifact repos',
+    hosts: [
+      // JFrog SaaS infrastructure (shared CDN layer)
+      'releases.jfrog.io',
+      'downloads.jfrog.io',
+      // Add your org-specific subdomain, e.g.: 'mycompany.jfrog.io'
+    ],
+  },
+  {
+    key: 'packagecloud',
+    label: 'packagecloud.io',
+    group: 'Artifact repos',
+    hosts: [
+      'packagecloud.io',
+      'packagecloud-repositories.s3.amazonaws.com',
+    ],
+  },
+  {
+    key: 'gemfury',
+    label: 'Gemfury / Fury.io',
+    group: 'Artifact repos',
+    hosts: [
+      'repo.fury.io',
+      'gem.fury.io',
+      'pypi.fury.io',
+      'npm.fury.io',
+    ],
+  },
+
+  // ── Container registries ──────────────────────────────────────────────────
+
+  {
+    key: 'dockerhub',
+    label: 'Docker Hub',
+    group: 'Container registries',
+    hosts: [
+      'registry-1.docker.io',
+      'auth.docker.io',
+      'index.docker.io',
+      'production.cloudflare.docker.com',
+      'docker.io',
+    ],
+  },
+  {
+    key: 'ghcr',
+    label: 'GHCR',
+    group: 'Container registries',
+    hosts: [
+      'ghcr.io',
+    ],
+  },
+  {
+    key: 'quay',
+    label: 'Quay.io',
+    group: 'Container registries',
+    hosts: [
+      'quay.io',
+      'cdn01.quay.io',
+      'cdn02.quay.io',
+      'cdn03.quay.io',
+    ],
+  },
+  {
+    key: 'ecrpublic',
+    label: 'Amazon ECR Public',
+    group: 'Container registries',
+    hosts: [
+      'public.ecr.aws',
+    ],
+  },
+  {
+    key: 'mcr',
+    label: 'Microsoft MCR',
+    group: 'Container registries',
+    hosts: [
+      'mcr.microsoft.com',
+    ],
+  },
+
+  // ── SCM / CI / cloud storage ──────────────────────────────────────────────
+
+  {
+    key: 'github',
+    label: 'GitHub',
+    group: 'SCM / CI',
+    hosts: [
+      'github.com',
+      'api.github.com',
+      'objects.githubusercontent.com',
+      'uploads.github.com',
+      'codeload.github.com',
+      'raw.githubusercontent.com',
+      'releases.githubusercontent.com',
+    ],
+  },
+
+  // ── OS packages ───────────────────────────────────────────────────────────
+
+  {
+    key: 'apt',
+    label: 'apt / Ubuntu',
+    group: 'OS packages',
+    hosts: [
+      'archive.ubuntu.com',
+      'security.ubuntu.com',
+      'packages.microsoft.com',
+      'ppa.launchpad.net',
+      'esm.ubuntu.com',
+    ],
+  },
+];
 
 
 /***/ })
@@ -27747,13 +28015,19 @@ async function main() {
   core.saveState('txBytes', counters.tx.toString());
   core.info(`Traffic monitor started — baseline RX: ${counters.rx} B, TX: ${counters.tx} B`);
 
+  const detailed = core.getInput('detailed') === 'true';
+  if (!detailed) {
+    core.info('Detailed breakdown disabled. Set detailed: true to enable per-service classification (requires sudo/iptables).');
+    return;
+  }
+
   try {
     const activeKeys = await setup();
     if (activeKeys && activeKeys.length > 0) {
       core.saveState('classifyKeys', JSON.stringify(activeKeys));
       core.info(`Traffic classification active for: ${activeKeys.join(', ')}`);
     } else {
-      core.info('Traffic classification unavailable (iptables not accessible or no IPs resolved).');
+      core.warning('Traffic classification: iptables unavailable or no IPs resolved. Falling back to totals only.');
     }
   } catch (e) {
     core.warning(`Traffic classification setup failed: ${e.message}`);

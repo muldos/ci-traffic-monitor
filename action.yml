@@ -6,6 +6,15 @@ branding:
   icon: activity
   color: blue
 
+inputs:
+  detailed:
+    description: >
+      Enable per-service traffic breakdown (npm, Maven, Docker, etc.).
+      Requires sudo and iptables on the runner. Safe to leave false on
+      self-hosted runners with restricted permissions.
+    required: false
+    default: 'false'
+
 runs:
   using: node24
   pre: dist/pre/index.js
