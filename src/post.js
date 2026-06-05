@@ -47,32 +47,49 @@ async function main() {
       const classified = read(activeKeys);
       cleanup(activeKeys);
 
+      // Group non-zero entries by service group
+      const groups = {};
       let classifiedRx = 0;
       let classifiedTx = 0;
-      const rows = [
-        [
-          { data: 'Category',       header: true },
-          { data: 'Inbound (MB)',   header: true },
-          { data: 'Outbound (MB)',  header: true },
-          { data: 'Total (MB)',     header: true },
-        ],
-      ];
 
-      for (const data of Object.values(classified)) {
-        if (data.rx > 0 || data.tx > 0) {
-          rows.push([data.label, toMB(data.rx), toMB(data.tx), toMB(data.rx + data.tx)]);
-          classifiedRx += data.rx;
-          classifiedTx += data.tx;
-        }
+      for (const [, data] of Object.entries(classified)) {
+        if (data.rx === 0 && data.tx === 0) continue;
+        if (!groups[data.group]) groups[data.group] = [];
+        groups[data.group].push(data);
+        classifiedRx += data.rx;
+        classifiedTx += data.tx;
       }
 
       const unknownRx = Math.max(0, rxTotal - classifiedRx);
       const unknownTx = Math.max(0, txTotal - classifiedTx);
-      rows.push(['Unknown / other', toMB(unknownRx), toMB(unknownTx), toMB(unknownRx + unknownTx)]);
+      const hasAny = Object.keys(groups).length > 0 || unknownRx > 0 || unknownTx > 0;
 
-      s.addHeading('Traffic Breakdown (best-effort)', 3)
-       .addTable(rows)
-       .addRaw('\n> Classification is best-effort: CDN-backed services may partially appear under "Unknown".\n');
+      if (hasAny) {
+        const header = [
+          { data: 'Service',       header: true },
+          { data: 'Inbound (MB)',  header: true },
+          { data: 'Outbound (MB)', header: true },
+          { data: 'Total (MB)',    header: true },
+        ];
+
+        const rows = [header];
+        for (const [groupName, entries] of Object.entries(groups)) {
+          rows.push([{ data: groupName, colspan: '4' }]);
+          for (const e of entries) {
+            rows.push([`  ${e.label}`, toMB(e.rx), toMB(e.tx), toMB(e.rx + e.tx)]);
+          }
+        }
+        rows.push([
+          { data: 'Unknown / other', header: true },
+          toMB(unknownRx),
+          toMB(unknownTx),
+          toMB(unknownRx + unknownTx),
+        ]);
+
+        s.addHeading('Traffic Breakdown (best-effort)', 3)
+         .addTable(rows)
+         .addRaw('\n> Best-effort via iptables DNS resolution. CDN-backed services may partially appear under "Unknown".\n');
+      }
     } catch (e) {
       core.warning(`Failed to read classified traffic: ${e.message}`);
     }

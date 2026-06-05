@@ -1,20 +1,11 @@
 const { execSync } = require('child_process');
 const dns = require('dns').promises;
+const SERVICES = require('./services');
 
-// Known services to classify by resolving their hostnames to IPs.
-// Classification is best-effort: CDN-backed services rotate IPs.
-const SERVICES = {
-  npm:    { label: 'npm',        hosts: ['registry.npmjs.org', 'registry.yarnpkg.com'] },
-  docker: { label: 'Docker Hub', hosts: ['registry-1.docker.io', 'auth.docker.io', 'index.docker.io'] },
-  ghcr:   { label: 'GHCR',       hosts: ['ghcr.io'] },
-  github: { label: 'GitHub',     hosts: ['github.com', 'api.github.com', 'objects.githubusercontent.com', 'uploads.github.com'] },
-  apt:    { label: 'apt/Ubuntu', hosts: ['archive.ubuntu.com', 'security.ubuntu.com', 'packages.microsoft.com'] },
-};
-
-const PREFIX = 'CTM'; // CI Traffic Monitor — iptables chain prefix
-
-const chainOut = (key) => `${PREFIX}_${key.toUpperCase()}_O`;
-const chainIn  = (key) => `${PREFIX}_${key.toUpperCase()}_I`;
+// iptables chain names: CTM_<KEY>_O (OUTPUT) and CTM_<KEY>_I (INPUT)
+// Max iptables chain name length: 28 chars. Keys must be ≤ 10 chars.
+const chainOut = (key) => `CTM_${key.toUpperCase()}_O`;
+const chainIn  = (key) => `CTM_${key.toUpperCase()}_I`;
 
 function run(cmd) {
   try { execSync(cmd, { stdio: 'pipe' }); return true; }
@@ -31,15 +22,18 @@ function iptablesAvailable() {
 }
 
 /**
- * Resolves service IPs via DNS and creates iptables counting chains.
- * Returns the list of successfully set-up service keys, or null if iptables unavailable.
+ * Resolves service hostnames to IPs and sets up iptables counting chains.
+ * Returns the list of service keys that were successfully set up, or null
+ * if iptables is unavailable.
  */
 async function setup() {
   if (!iptablesAvailable()) return null;
 
   const activeKeys = [];
 
-  for (const [key, { hosts }] of Object.entries(SERVICES)) {
+  for (const svc of SERVICES) {
+    const { key, hosts } = svc;
+
     const ips = new Set();
     for (const host of hosts) {
       try {
@@ -52,6 +46,7 @@ async function setup() {
     const co = chainOut(key);
     const ci = chainIn(key);
 
+    // Create chains (silently ignore if they already exist)
     run(`sudo iptables -N ${co}`);
     run(`sudo iptables -N ${ci}`);
 
@@ -60,7 +55,7 @@ async function setup() {
       run(`sudo iptables -A ${ci} -s ${ip} -j RETURN`);
     }
 
-    // Insert jump at the top of OUTPUT / INPUT so our chains see all packets
+    // Insert jump rules at the top of OUTPUT / INPUT
     run(`sudo iptables -I OUTPUT 1 -j ${co}`);
     run(`sudo iptables -I INPUT  1 -j ${ci}`);
 
@@ -71,7 +66,8 @@ async function setup() {
 }
 
 /**
- * Sums the bytes column from `iptables -L <chain> -v -x -n` output.
+ * Sums bytes from all rules in an iptables chain.
+ * `iptables -L <chain> -v -x -n` columns: pkts bytes target prot ...
  */
 function chainBytes(chain) {
   const output = runOut(`sudo iptables -L ${chain} -v -x -n`);
@@ -88,13 +84,16 @@ function chainBytes(chain) {
 
 /**
  * Reads classified byte counts for each active service key.
- * Returns { <key>: { label, rx, tx } }
+ * Returns { <key>: { label, group, rx, tx } }
  */
 function read(activeKeys) {
+  const serviceMap = Object.fromEntries(SERVICES.map(s => [s.key, s]));
   const result = {};
   for (const key of activeKeys) {
+    const svc = serviceMap[key];
     result[key] = {
-      label: SERVICES[key].label,
+      label: svc.label,
+      group: svc.group,
       rx: chainBytes(chainIn(key)),
       tx: chainBytes(chainOut(key)),
     };
@@ -103,7 +102,7 @@ function read(activeKeys) {
 }
 
 /**
- * Removes all CTM_* chains and their jump rules from OUTPUT/INPUT.
+ * Removes all CTM_* chains and their jump rules from OUTPUT / INPUT.
  */
 function cleanup(activeKeys) {
   for (const key of activeKeys) {
@@ -118,4 +117,4 @@ function cleanup(activeKeys) {
   }
 }
 
-module.exports = { setup, read, cleanup, SERVICES };
+module.exports = { setup, read, cleanup };
