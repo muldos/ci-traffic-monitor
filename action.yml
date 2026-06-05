@@ -9,5 +9,5 @@ branding:
 runs:
   using: node24
   pre: dist/pre/index.js
-  main: dist/post/index.js
+  main: dist/main/index.js
   post: dist/post/index.js
